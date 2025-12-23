@@ -10,7 +10,6 @@ const creds = {
 const app = express();
 app.use(express.json());
 
-// --- GOOGLE SHEET LOGIC ---
 async function addToSheet(data) {
   try {
     const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
@@ -25,11 +24,12 @@ async function addToSheet(data) {
       FirstName: data.first_name,
       LastName: data.last_name,
       Email: data.email,
-      Phone: data.phone,           // Ab ye kabhi khali nahi hoga (agar customer ne diya hai)
+      Phone: data.phone,
       Products: data.products,
       TotalAmount: data.total_price,
+      PaymentMethod: data.gateway,
+      Tags: data.tags,
       FullAddress: data.address,
-      RiskScore: data.risk
     });
 
     console.log('📝 Saved to Google Sheet successfully!');
@@ -38,35 +38,45 @@ async function addToSheet(data) {
   }
 }
 
-// --- WEBHOOK ROUTE ---
 app.post('/webhook/orders', async (req, res) => {
   try {
     const order = req.body;
     
-    // --- 1. Variables Extraction ---
     const state = order.shipping_address?.province?.toLowerCase() || ""; 
-    const riskScore = order.risk_analysis?.score ? parseFloat(order.risk_analysis.score) : 0.0;
+    const tags = order.tags || ""; 
+
+    const paymentGateways = order.payment_gateway_names || [];
+    let gateway = "Prepaid"; 
     
-    // --- 2. Filter Logic (State: Delhi) ---
-    if (state.includes('delhi') && riskScore < 0.5) {
+    if (paymentGateways.includes('manual') || order.gateway === 'manual') {
+      gateway = "COD";
+    } else if (paymentGateways.length > 0) {
+      gateway = paymentGateways.join(", "); 
+    }
+
+    const isDelhi = state.includes('delhi');
+
+    // Rule 3: High Risk Tag Filter (Optional)
+    // if (tags.includes('High Risk')) { return res.status(200).send('Skipped: High Risk'); }
+
+    // ACTIVE RULE: Skip if order is COD
+    if (gateway === 'COD') { return res.status(200).send('Skipped: COD Order'); }
+
+    
+    if (isDelhi) { 
       
-      console.log(`✅ Order Matched! Fetching details...`);
+      console.log(`✅ Order Matched! Tags: [${tags}], Payment: [${gateway}]`);
 
       const addr = order.shipping_address || {};
 
-      // 🔥 PHONE NUMBER LOGIC (Ye hai main change) 🔥
-      // Hum har jagah check karenge priority ke hisaab se
       const finalPhone = 
-        order.phone ||                 // 1. Direct Order Phone
-        addr.phone ||                  // 2. Shipping Address Phone
-        order.billing_address?.phone || // 3. Billing Address Phone
-        order.customer?.phone ||       // 4. Customer Profile Phone
-        "No Phone";                    // Agar kahin nahi mila
+        order.phone ||                 
+        addr.phone ||                  
+        order.billing_address?.phone || 
+        order.customer?.phone ||       
+        "No Phone";                    
 
-      // Address Merge
       const fullAddress = `${addr.address1 || ""}, ${addr.city || ""}, ${addr.province || ""}, ${addr.zip || ""}, ${addr.country || ""}`;
-
-      // Products Merge
       const productNames = order.line_items.map(item => item.title).join(", ");
 
       await addToSheet({
@@ -76,17 +86,16 @@ app.post('/webhook/orders', async (req, res) => {
         first_name: addr.first_name || order.customer?.first_name || "",
         last_name: addr.last_name || order.customer?.last_name || "",
         email: order.email || order.customer?.email || "",
-        
-        phone: finalPhone, // Updated variable pass kiya
-        
+        phone: finalPhone,
         products: productNames,
         total_price: order.total_price,
-        address: fullAddress,
-        risk: riskScore
+        gateway: gateway,
+        tags: tags,
+        address: fullAddress
       });
 
     } else {
-      console.log(`⛔ Skipped: Order is from State: '${state}' (Risk: ${riskScore})`);
+      console.log(`⛔ Skipped: (State: ${state})`);
     }
 
     res.status(200).send('Webhook Received');
