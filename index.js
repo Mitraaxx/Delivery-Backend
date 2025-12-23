@@ -50,7 +50,7 @@ app.post('/webhook/orders', async (req, res) => {
     const riskScore = order.risk_analysis?.score ? parseFloat(order.risk_analysis.score) : 0.0;
     
     // Filtering: Sirf Delhi aur Low Risk chahiye
-    if (city === 'delhi' && riskScore < 0.5) {
+    if (city.includes('delhi') && riskScore < 0.5) {
       console.log(`✅ Order ${order.name} Matched! Preparing data...`);
 
       // --- LOGIC: Products ka naam nikalna ---
