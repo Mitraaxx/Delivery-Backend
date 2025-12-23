@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 
-// Cloud aur Local credentials logic
 const creds = {
   client_email: process.env.CLIENT_EMAIL,
   private_key: process.env.PRIVATE_KEY ? process.env.PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
@@ -15,12 +14,10 @@ app.use(express.json());
 async function addToSheet(data) {
   try {
     const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
-
     await doc.useServiceAccountAuth(creds);
     await doc.loadInfo();
     const sheet = doc.sheetsByIndex[0];
 
-    // UPDATED: State aur City hata diya hai
     await sheet.addRow({
       OrderID: data.id,
       OrderName: data.name,
@@ -28,10 +25,10 @@ async function addToSheet(data) {
       FirstName: data.first_name,
       LastName: data.last_name,
       Email: data.email,
-      Phone: data.phone,
+      Phone: data.phone,           // Ab ye kabhi khali nahi hoga (agar customer ne diya hai)
       Products: data.products,
       TotalAmount: data.total_price,
-      FullAddress: data.address, // Isme sab kuch hai (City, Zip, State)
+      FullAddress: data.address,
       RiskScore: data.risk
     });
 
@@ -47,32 +44,41 @@ app.post('/webhook/orders', async (req, res) => {
     const order = req.body;
     
     // --- 1. Variables Extraction ---
-    // State hum sirf filter karne ke liye nikal rahe hain
     const state = order.shipping_address?.province?.toLowerCase() || ""; 
     const riskScore = order.risk_analysis?.score ? parseFloat(order.risk_analysis.score) : 0.0;
     
     // --- 2. Filter Logic (State: Delhi) ---
-    // Agar State mein 'delhi' hai toh hi aage badho
     if (state.includes('delhi') && riskScore < 0.5) {
       
-      console.log(`✅ Customer ${order.shipping_address?.first_name} is from ${state}. Processing...`);
+      console.log(`✅ Order Matched! Fetching details...`);
+
+      const addr = order.shipping_address || {};
+
+      // 🔥 PHONE NUMBER LOGIC (Ye hai main change) 🔥
+      // Hum har jagah check karenge priority ke hisaab se
+      const finalPhone = 
+        order.phone ||                 // 1. Direct Order Phone
+        addr.phone ||                  // 2. Shipping Address Phone
+        order.billing_address?.phone || // 3. Billing Address Phone
+        order.customer?.phone ||       // 4. Customer Profile Phone
+        "No Phone";                    // Agar kahin nahi mila
 
       // Address Merge
-      const addr = order.shipping_address;
-      const fullAddress = `${addr.address1}, ${addr.city}, ${addr.province}, ${addr.zip}, ${addr.country}`;
+      const fullAddress = `${addr.address1 || ""}, ${addr.city || ""}, ${addr.province || ""}, ${addr.zip || ""}, ${addr.country || ""}`;
 
       // Products Merge
       const productNames = order.line_items.map(item => item.title).join(", ");
 
-      // Sheet Function Call (Bina State/City columns ke)
       await addToSheet({
         id: order.id,
         name: order.name,
         created_at: order.created_at,
-        first_name: addr.first_name || "",
-        last_name: addr.last_name || "",
-        email: order.email || "",
-        phone: addr.phone || "",
+        first_name: addr.first_name || order.customer?.first_name || "",
+        last_name: addr.last_name || order.customer?.last_name || "",
+        email: order.email || order.customer?.email || "",
+        
+        phone: finalPhone, // Updated variable pass kiya
+        
         products: productNames,
         total_price: order.total_price,
         address: fullAddress,
