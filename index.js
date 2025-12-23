@@ -2,7 +2,10 @@ require('dotenv').config();
 const express = require('express');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 
-const creds = require('./credentials.json');
+const creds = {
+  client_email: process.env.CLIENT_EMAIL, 
+  private_key: process.env.PRIVATE_KEY ? process.env.PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
+};
 
 const app = express();
 app.use(express.json());
