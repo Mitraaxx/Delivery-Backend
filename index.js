@@ -10,6 +10,16 @@ const creds = {
 const app = express();
 app.use(express.json());
 
+//Add any tag you want to block (keep it lowercase)
+const BLOCKED_TAGS = [
+  "cod",
+  "high risk",
+  "high rto risk",
+  "fraud",
+  "blacklist",
+  "return likely"
+];
+
 async function addToSheet(data) {
   try {
     const doc = new GoogleSpreadsheet(process.env.SPREADSHEET_ID);
@@ -29,9 +39,8 @@ async function addToSheet(data) {
       TotalAmount: data.total_price,
       PaymentMethod: data.gateway,
       Tags: data.tags,
-      FullAddress: data.address,
+      FullAddress: data.address
     });
-
     console.log('📝 Saved to Google Sheet successfully!');
   } catch (error) {
     console.error('❌ Sheet Error:', error.message);
@@ -43,39 +52,38 @@ app.post('/webhook/orders', async (req, res) => {
     const order = req.body;
     
     const state = order.shipping_address?.province?.toLowerCase() || ""; 
-    const tags = order.tags || ""; 
+    
+    const rawTags = order.tags || "";
+    const orderTagsArray = rawTags.split(',').map(tag => tag.trim().toLowerCase());
 
     const paymentGateways = order.payment_gateway_names || [];
-    let gateway = "Prepaid"; 
+    let gateway = "Prepaid";
     
     if (paymentGateways.includes('manual') || order.gateway === 'manual') {
       gateway = "COD";
     } else if (paymentGateways.length > 0) {
-      gateway = paymentGateways.join(", "); 
+      gateway = paymentGateways.join(", ");
     }
 
+    const hasBlockedTag = orderTagsArray.some(tag => BLOCKED_TAGS.includes(tag));
+    const isCOD = gateway === 'COD';
     const isDelhi = state.includes('delhi');
 
-    // Rule 3: High Risk Tag Filter (Optional)
-    // if (tags.includes('High Risk')) { return res.status(200).send('Skipped: High Risk'); }
+    if (hasBlockedTag) {
+      console.log(`⛔ Skipped: Blocked Tag Detected [${rawTags}]`);
+      return res.status(200).send('Skipped: Blocked Tag');
+    }
 
-    // ACTIVE RULE: Skip if order is COD
-    if (gateway === 'COD') { return res.status(200).send('Skipped: COD Order'); }
+    if (isCOD) {
+      console.log(`⛔ Skipped: COD Payment`);
+      return res.status(200).send('Skipped: COD Payment');
+    }
 
-    
-    if (isDelhi) { 
+    if (isDelhi) {
+      console.log(`✅ Order Matched! Processing...`);
       
-      console.log(`✅ Order Matched! Tags: [${tags}], Payment: [${gateway}]`);
-
       const addr = order.shipping_address || {};
-
-      const finalPhone = 
-        order.phone ||                 
-        addr.phone ||                  
-        order.billing_address?.phone || 
-        order.customer?.phone ||       
-        "No Phone";                    
-
+      const finalPhone = order.phone || addr.phone || order.billing_address?.phone || order.customer?.phone || "No Phone";                    
       const fullAddress = `${addr.address1 || ""}, ${addr.city || ""}, ${addr.province || ""}, ${addr.zip || ""}, ${addr.country || ""}`;
       const productNames = order.line_items.map(item => item.title).join(", ");
 
@@ -90,12 +98,11 @@ app.post('/webhook/orders', async (req, res) => {
         products: productNames,
         total_price: order.total_price,
         gateway: gateway,
-        tags: tags,
+        tags: rawTags,
         address: fullAddress
       });
-
     } else {
-      console.log(`⛔ Skipped: (State: ${state})`);
+      console.log(`⛔ Skipped: Not from Delhi (State: ${state})`);
     }
 
     res.status(200).send('Webhook Received');
